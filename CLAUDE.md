@@ -34,7 +34,7 @@ Public portfolio project for Kris Bennett (GitHub: kbennett2000, Twelve Rocks LL
 - Every design decision gets an ADR (architecture decision record — a short numbered file explaining one decision) in docs/adr/, numbered 0001 upward.
 - Tests: pytest. All tests run against a mocked API and must pass with no network access.
 - The tool must have a --dry-run mode: report what it would stop, stop nothing.
-- No live API calls of any kind until Kris explicitly starts the final proving run and supplies the key.
+- No live API calls of any kind until Kris explicitly starts a live run and supplies the key. During a live run, halt and ask Kris in two cases: a platform surprise (the API or the pod behaves in a way the plan did not anticipate), and anything that would spend money beyond the steps he listed. A defect in our own code is not a halt: fix it, verify the fix against the mocked tests, then continue the listed steps. Never invent new live experiments to investigate something — write the open question down instead.
 - Secrets: the API key comes only from the RUNPOD_API_KEY environment variable. Never write it to a file, never print it, never commit it. .env stays in .gitignore.
 - This repo is public from the first push. Everything committed is public immediately.
 - Python 3.12+, uv for environment and dependencies. Runtime dependency: requests only. Dev dependencies: pytest, plus a requests-mocking helper if needed. Commit uv.lock.
