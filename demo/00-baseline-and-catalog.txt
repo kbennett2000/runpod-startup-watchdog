@@ -1,0 +1,94 @@
+Cycle 4, live proving run — step 0: the account before anything was created.
+
+Read-only. Nothing is created in this transcript. The account listing here is
+the baseline that the final listing (demo/05-account-after.txt) is compared
+against.
+
+The API key was in the RUNPOD_API_KEY environment variable for every command
+below. It is never passed as an argument, never printed, and never written to
+a file.
+
+# 2026-08-12 16:49:04 UTC
+$ uv run runpod-watchdog-pod list
+No pods on this account.
+[exit code 0]
+
+Picking the cheapest instance. GET /v2/catalog/cpus is a read-only catalog call; the
+watchdog never needs it, so it is a one-off script rather than part of the tool. Its
+source is quoted at the end of this file.
+
+$ uv run python /tmp/claude-1000/-home-kb-Desktop-projects-runpod-startup-watchdog/4fee3294-8fe3-48e1-8e54-5eabad8eb92b/scratchpad/cpu_catalog.py
+HTTP 200
+6 CPU flavors
+
+FLAVOR  NAME               VCPU  USD/VCPU/HR  AVAIL  DATA CENTERS
+cpu3c   Compute-Optimized  2-32  0.03         HIGH   AP-IN-1,AP-JP-1,CA-MTL-1,CA-MTL-3,CA-MTL-4,EU-CZ-1,EU-FR-1,EU-NL-1,EU-RO-1,EU-SE-1,EUR-IS-1,EUR-IS-2,EUR-IS-3,EUR-IS-4,EUR-NO-1,EUR-NO-2,OC-AU-1,US-CA-2,US-GA-2,US-IL-1,US-KS-2,US-MD-1,US-MO-1,US-MO-2,US-NC-1,US-NC-2,US-NE-1,US-TX-3,US-TX-4,US-WA-1,US-WA-2
+cpu5c   Compute-Optimized  2-32  0.035        HIGH   AP-IN-1,AP-JP-1,CA-MTL-1,CA-MTL-3,CA-MTL-4,EU-CZ-1,EU-FR-1,EU-NL-1,EU-RO-1,EU-SE-1,EUR-IS-1,EUR-IS-2,EUR-IS-3,EUR-IS-4,EUR-NO-1,EUR-NO-2,OC-AU-1,US-CA-2,US-GA-2,US-IL-1,US-KS-2,US-MD-1,US-MO-1,US-MO-2,US-NC-1,US-NC-2,US-NE-1,US-TX-3,US-TX-4,US-WA-1,US-WA-2
+cpu3g   General Purpose    2-32  0.04         HIGH   AP-IN-1,AP-JP-1,CA-MTL-1,CA-MTL-3,CA-MTL-4,EU-CZ-1,EU-FR-1,EU-NL-1,EU-RO-1,EU-SE-1,EUR-IS-1,EUR-IS-2,EUR-IS-3,EUR-IS-4,EUR-NO-1,EUR-NO-2,OC-AU-1,US-CA-2,US-GA-2,US-IL-1,US-KS-2,US-MD-1,US-MO-1,US-MO-2,US-NC-1,US-NC-2,US-NE-1,US-TX-3,US-TX-4,US-WA-1,US-WA-2
+cpu5g   General Purpose    2-32  0.046        HIGH   AP-IN-1,AP-JP-1,CA-MTL-1,CA-MTL-3,CA-MTL-4,EU-CZ-1,EU-FR-1,EU-NL-1,EU-RO-1,EU-SE-1,EUR-IS-1,EUR-IS-2,EUR-IS-3,EUR-IS-4,EUR-NO-1,EUR-NO-2,OC-AU-1,US-CA-2,US-GA-2,US-IL-1,US-KS-2,US-MD-1,US-MO-1,US-MO-2,US-NC-1,US-NC-2,US-NE-1,US-TX-3,US-TX-4,US-WA-1,US-WA-2
+cpu3m   Memory-Optimized   2-32  0.055        HIGH   AP-IN-1,AP-JP-1,CA-MTL-1,CA-MTL-3,CA-MTL-4,EU-CZ-1,EU-FR-1,EU-NL-1,EU-RO-1,EU-SE-1,EUR-IS-1,EUR-IS-2,EUR-IS-3,EUR-IS-4,EUR-NO-1,EUR-NO-2,OC-AU-1,US-CA-2,US-GA-2,US-IL-1,US-KS-2,US-MD-1,US-MO-1,US-MO-2,US-NC-1,US-NC-2,US-NE-1,US-TX-3,US-TX-4,US-WA-1,US-WA-2
+cpu5m   Memory-Optimized   2-32  0.065        HIGH   AP-IN-1,AP-JP-1,CA-MTL-1,CA-MTL-3,CA-MTL-4,EU-CZ-1,EU-FR-1,EU-NL-1,EU-RO-1,EU-SE-1,EUR-IS-1,EUR-IS-2,EUR-IS-3,EUR-IS-4,EUR-NO-1,EUR-NO-2,OC-AU-1,US-CA-2,US-GA-2,US-IL-1,US-KS-2,US-MD-1,US-MO-1,US-MO-2,US-NC-1,US-NC-2,US-NE-1,US-TX-3,US-TX-4,US-WA-1,US-WA-2
+
+USD/VCPU/HR is Runpod account spend, secure cloud, per vCPU per hour.
+[exit code 0]
+
+Chosen for every pod in this proving run: cpu3c, 2 vCPU, secure cloud.
+That is the cheapest flavor Runpod offers, 0.03 US dollars per vCPU per hour of
+Runpod account spend, so 0.06 per hour per pod. Availability HIGH in every data
+center, so no data center is named and the scheduler chooses.
+
+-------------------------------------------------------------------------------
+Source of the catalog script quoted above:
+
+    """Read GET /v2/catalog/cpus and print the flavors cheapest first.
+    
+    A one-off research step for the proving run, not part of the tool: the watchdog never needs the
+    catalog. Kept in the scratchpad rather than the repo for that reason, and reproduced here in the
+    transcript so the choice of instance is checkable.
+    
+    The key comes from RUNPOD_API_KEY and is never printed.
+    """
+    
+    import os
+    import sys
+    
+    import requests
+    
+    key = os.environ.get("RUNPOD_API_KEY", "").strip()
+    if not key:
+        sys.exit("No RUNPOD_API_KEY in the environment.")
+    
+    response = requests.get(
+        "https://api.runpod.io/v2/catalog/cpus",
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+        params={"include": "AVAILABILITY"},
+        timeout=(10, 30),
+    )
+    print(f"HTTP {response.status_code}")
+    response.raise_for_status()
+    
+    cpus = response.json().get("cpus", [])
+    print(f"{len(cpus)} CPU flavors\n")
+    
+    rows = []
+    for cpu in cpus:
+        price = (cpu.get("price") or {}).get("securePerVcpu")
+        vcpu = cpu.get("vcpu") or {}
+        rows.append((
+            price if isinstance(price, (int, float)) else 9e9,
+            cpu.get("id", ""),
+            cpu.get("name", ""),
+            f"{vcpu.get('min')}-{vcpu.get('max')}",
+            str(price),
+            str(cpu.get("availability")),
+            ",".join(dc.get("id", "") for dc in (cpu.get("dataCenters") or [])),
+        ))
+    rows.sort()
+    
+    header = ("FLAVOR", "NAME", "VCPU", "USD/VCPU/HR", "AVAIL", "DATA CENTERS")
+    table = [header] + [row[1:] for row in rows]
+    widths = [max(len(r[i]) for r in table) for i in range(len(header))]
+    for row in table:
+        print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip())
+    
+    print("\nUSD/VCPU/HR is Runpod account spend, secure cloud, per vCPU per hour.")

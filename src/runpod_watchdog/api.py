@@ -114,8 +114,14 @@ class NetworkError(RunpodError):
 class LogStreamIdle(RunpodError):
     """The log stream sent nothing for longer than the read timeout.
 
-    Not necessarily a fault — a quiet pod is quiet. `read_pod_logs` treats it as the end of a
-    batch rather than as an error.
+    Not necessarily a fault — a quiet pod is quiet.
+
+    Do not rely on this to mean "quiet" and `NetworkError` to mean "broken". The live run found
+    that requests reports a mid-stream read timeout as `requests.exceptions.ConnectionError`, not
+    as `ReadTimeout`, so a quiet stream arrives here as a `NetworkError` instead. Telling the two
+    apart would mean reaching past requests into urllib3's exception classes, and it would buy
+    nothing: the answer to both is the same. `read_pod_logs` therefore treats *any* interruption as
+    the end of a batch. ADR-0005.
     """
 
 
@@ -527,9 +533,20 @@ class RunpodClient:
         """Collect log events for up to `seconds`, then close the stream.
 
         The deadline is checked after each event, so collecting stops at the first event at or
-        after it. If the pod says nothing at all, this returns when the stream goes idle — so the
+        after it. If the pod says nothing at all, this returns when the stream goes quiet — so the
         real worst case is the read timeout, not `seconds`. That is a property of a pushed stream:
         there is nothing to return early from while the connection is simply quiet.
+
+        **Whatever ends the stream, the lines already collected are kept and returned.** Going
+        quiet and dropping the connection are not told apart, because requests reports both the
+        same way (see `LogStreamIdle`) and because the right response to both is identical: keep
+        what arrived, and let the next call resume from the last event id. Throwing the batch away
+        was a real bug, found on the live run and fixed here — every log read ends this way, so a
+        watchdog that discarded the batch each time would never see a phrase at all. ADR-0005.
+
+        A failure that happens before the stream opens — no such pod, a rejected key — is raised
+        rather than swallowed, because it is not an interrupted batch. Those are raised by
+        `_request` on the first iteration, and only `NetworkError` is caught here.
         """
         deadline = time.monotonic() + seconds
         events: list[LogEvent] = []
@@ -539,8 +556,8 @@ class RunpodClient:
                 events.append(event)
                 if time.monotonic() >= deadline:
                     break
-        except LogStreamIdle:
-            pass  # A quiet pod is not a broken pod. What arrived is the batch.
+        except (LogStreamIdle, NetworkError):
+            pass  # A quiet pod is not a broken pod, and a broken stream is not a lost batch.
         finally:
             stream.close()
         return events

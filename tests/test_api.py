@@ -565,6 +565,61 @@ def test_read_pod_logs_treats_silence_as_the_end_of_the_batch(client, mocked, mo
     assert client.read_pod_logs(POD, seconds=30) == []
 
 
+def _lines_then_raise(error, *lines):
+    """An iter_lines that yields some real lines and then fails partway through."""
+
+    def iter_lines(self, *args, **kwargs):
+        yield from lines
+        raise error
+
+    return iter_lines
+
+
+def test_read_pod_logs_keeps_the_lines_it_already_collected(client, mocked, monkeypatch):
+    """The bug the live run found, and the reason this test exists.
+
+    requests reports a mid-stream read timeout as ConnectionError, not ReadTimeout, so the
+    LogStreamIdle branch never fired and every collected event was thrown away with the exception.
+    Since every log read ends by going quiet, the watchdog would have seen no log lines at all.
+    ADR-0005.
+    """
+    mocked.add(responses.GET, LOGS_URL, body="", status=200, content_type="text/event-stream")
+    monkeypatch.setattr(
+        requests.Response,
+        "iter_lines",
+        _lines_then_raise(
+            requests.exceptions.ConnectionError("Read timed out."),
+            b"id: 1",
+            b'data: {"ts":"t","source":"container","line":"ready for start up"}',
+            b"",
+        ),
+    )
+
+    events = client.read_pod_logs(POD, seconds=30)
+
+    assert [e.line for e in events] == ["ready for start up"]
+    assert events[0].event_id == "1"
+
+
+def test_read_pod_logs_does_not_raise_when_the_stream_drops(client, mocked, monkeypatch):
+    mocked.add(responses.GET, LOGS_URL, body="", status=200, content_type="text/event-stream")
+    monkeypatch.setattr(
+        requests.Response,
+        "iter_lines",
+        _lines_then_raise(requests.exceptions.ChunkedEncodingError("dropped")),
+    )
+
+    assert client.read_pod_logs(POD, seconds=30) == []
+
+
+def test_read_pod_logs_still_raises_when_the_pod_is_gone(client, mocked):
+    """A pod that does not exist is not an interrupted batch, so it is not swallowed."""
+    mocked.add(responses.GET, LOGS_URL, json={"title": "Not Found", "status": 404}, status=404)
+
+    with pytest.raises(api.PodNotFoundError):
+        client.read_pod_logs(POD, seconds=30)
+
+
 def test_a_dropped_stream_becomes_a_network_error(client, mocked, monkeypatch):
     mocked.add(responses.GET, LOGS_URL, body="", status=200, content_type="text/event-stream")
     monkeypatch.setattr(

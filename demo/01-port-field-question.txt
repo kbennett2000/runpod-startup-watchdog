@@ -1,0 +1,193 @@
+Cycle 4, live proving run — step 1: does REST v2 publish a pod's public port
+address, or not?
+
+This is the open question ADR-0004 recorded and could not answer without a live
+run. The watchdog's --port signal opens a real TCP connection to the address in
+the pod's runtime.ports. Runpod's own runpodctl says in its source that the REST
+read shape leaves runtime null even on a running pod, "verified against prod",
+which is why their pod wait uses GraphQL instead. If that is still true here,
+then --port can never fire on this API surface and the README has to say so.
+
+One pod settles it: nginx:alpine, which is a small public image that starts a
+real HTTP server, on the cheapest CPU flavor, exposing port 80 as TCP.
+
+80/tcp and not 80/http: the watchdog probes TCP directly, because Runpod's HTTP
+proxy appears nowhere in the v2 OpenAPI document and ADR-0004 requires a public
+source for every claim. So 80/tcp is the form that asks for the thing being
+tested.
+
+# 2026-08-12 16:50:07 UTC
+$ uv run runpod-watchdog-pod create --name watchdog-proving-server --image nginx:alpine --cpu cpu3c --vcpu 2 --port 80/tcp --disk 5 --dry-run
+Creating pod with:
+  name   "watchdog-proving-server"
+  image  "nginx:alpine"
+  cpu    {"id": "cpu3c", "vcpuCount": 2}
+  ports  ["80/tcp"]
+  disk   5
+
+dry run: nothing was created.
+[exit code 0]
+
+Same command without --dry-run. This one spends money.
+
+$ uv run runpod-watchdog-pod create --name watchdog-proving-server --image nginx:alpine --cpu cpu3c --vcpu 2 --port 80/tcp --disk 5
+Creating pod with:
+  name   "watchdog-proving-server"
+  image  "nginx:alpine"
+  cpu    {"id": "cpu3c", "vcpuCount": 2}
+  ports  ["80/tcp"]
+  disk   5
+
+pod id: k8i04861n33in4
+  id             k8i04861n33in4
+  name           watchdog-proving-server
+  status         RUNNING
+  image          nginx:alpine
+  args           (none)
+  exposed ports  80/tcp
+  runtime.ports  null
+  data center    US-CA-2
+  cost           0.06 US dollars per hour of Runpod account spend
+  actions        stop, restart, terminate
+  created        2026-08-12T16:50:14.593Z
+  started        2026-08-12T16:50:14.587Z
+
+Provisioning is asynchronous: the pod starts PROVISIONING and is not usable yet. That gap is what the watchdog watches.
+[exit code 0]
+
+Polling every 15 seconds for 6 minutes, watching for runtime.ports to fill in.
+
+[16:50:38 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:50:54 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:51:10 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:51:25 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:51:41 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:51:57 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:52:12 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:52:28 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:52:43 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:52:59 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:53:15 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:53:30 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:53:46 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:54:02 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:54:18 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:54:34 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:54:49 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:55:05 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:55:20 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:55:36 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:55:52 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+[16:56:08 UTC] status RUNNING      runtime.ports [{"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}, {"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}]
+[16:56:23 UTC] status RUNNING      runtime.ports [{"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}, {"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}]
+[16:56:39 UTC] status RUNNING      runtime.ports [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+
+The whole pod as REST v2 returns it, so the shape is on record and not paraphrased.
+Environment variable values would be hidden here; this pod sets none.
+
+$ uv run runpod-watchdog-pod show k8i04861n33in4 --json
+{
+  "actions": [
+    "stop",
+    "restart",
+    "terminate"
+  ],
+  "args": "",
+  "cloud": "SECURE",
+  "cost": 0.06,
+  "cpu": {
+    "id": "cpu3c",
+    "memory": 4,
+    "vcpuCount": 2
+  },
+  "createdAt": "2026-08-12T16:50:14.593Z",
+  "dataCenterId": "US-CA-2",
+  "disk": 5,
+  "env": {},
+  "globalNetworking": {
+    "enabled": false
+  },
+  "id": "k8i04861n33in4",
+  "image": "nginx:alpine",
+  "locked": false,
+  "mounts": {},
+  "name": "watchdog-proving-server",
+  "ports": [
+    "80/tcp"
+  ],
+  "registry": null,
+  "runtime": {
+    "cpu": {
+      "util": 0
+    },
+    "memory": {
+      "util": 0
+    },
+    "ports": [
+      {
+        "ip": "100.65.23.30",
+        "private": 19123,
+        "public": 60223,
+        "type": "http"
+      },
+      {
+        "ip": "38.80.152.147",
+        "private": 80,
+        "public": 39998,
+        "type": "tcp"
+      }
+    ],
+    "uptime": 390
+  },
+  "startedAt": "2026-08-12T16:50:14.587Z",
+  "status": "RUNNING",
+  "template": null
+}
+[exit code 0]
+
+-------------------------------------------------------------------------------
+THE ANSWER: the field is populated.
+
+runtime.ports is present and filled on a RUNNING pod read over REST API v2. The
+entry for the port that was asked for carries a real, publicly routable address:
+
+    {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}
+
+`private` is the port inside the container, `public` is the port outside, `ip`
+is the address to connect to. That is exactly the shape watch.py's
+public_mapping() already reads, so the --port success signal works on this API
+surface. ADR-0004 listed this as the one thing a live run had to settle, and the
+concern it recorded — from runpodctl's source, which says the REST read shape
+leaves runtime null even on a running pod, "verified against prod" — does not
+hold here on 2026-08-12.
+
+Four further observations from the same transcript, none of them expected:
+
+1. The pod reported status RUNNING in the response to the create call itself,
+   at 16:50:14. It never passed through PROVISIONING or STARTING in any read.
+   The OpenAPI document's own description of createPod says the opposite: "the
+   pod starts in PROVISIONING, transitions through STARTING, and reaches RUNNING
+   once its container is healthy."
+
+   It was not healthy. The pod's own log, timestamped, shows the nginx:alpine
+   image still downloading after that: "Extracting", "Pull complete", "Status:
+   Downloaded newer image for nginx:alpine", and nginx itself not starting until
+   16:50:27 — thirteen seconds after the API called it RUNNING.
+
+   This is the premise of the whole project, observed directly: status RUNNING
+   does not mean usable, and from outside, broken and slow look identical.
+
+2. runtime.ports was still null in the create response at 16:50:14, and
+   populated by the first poll at 16:50:38. So "null" is a normal early reading,
+   not a fault — which is what the watchdog already reports it as.
+
+3. The two entries in runtime.ports come back in a different order on different
+   reads (compare 16:55:52 with 16:56:08). Nothing may depend on their position.
+   public_mapping() matches on the `private` field, so it is unaffected.
+
+4. Not every entry is publicly routable. The second entry, port 19123 type
+   http, has ip 100.65.23.30 — inside 100.64.0.0/10, the range reserved for
+   carrier-grade NAT, so it is not reachable from outside. Only the tcp entry
+   carries a public address. A user who exposes a port as `N/http` may therefore
+   get a mapping the TCP probe cannot reach. Expose the port as `N/tcp` if you
+   intend to use --port.

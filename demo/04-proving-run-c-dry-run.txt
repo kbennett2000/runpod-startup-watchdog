@@ -1,0 +1,66 @@
+Cycle 4, live proving run C — --dry-run against a live pod.
+
+The same nginx:alpine pod, still running and still healthy. This run is set up
+to fail it on purpose, and to ask for the most destructive action available:
+
+  --success-phrase   a phrase the pod will never print
+  --max-minutes 0.5  thirty seconds, so the clock runs out
+  --terminate        delete the pod outright, not just stop it
+  --dry-run          change nothing
+
+So a real run of this command would have deleted a perfectly healthy pod. The
+point is what happens instead. Expected: the timeout verdict, exit code 3 — the
+same code the real run would have returned — and the pod untouched.
+
+# 2026-08-12 16:58:07 UTC
+$ uv run runpod-watchdog --pod-id k8i04861n33in4 --max-minutes 0.5 --success-phrase NGINX\ WILL\ NEVER\ PRINT\ THIS --terminate --dry-run
+Settings for this run:
+  pod-id          k8i04861n33in4
+  max-minutes     0.5
+  port            (not set)
+  success-phrase  "NGINX WILL NEVER PRINT THIS"
+  failure-phrase  (not set)
+  retry           no
+  terminate       yes
+  dry-run         yes
+  config file     (none)
+
+Watching pod k8i04861n33in4. Time limit 0.5 minutes.
+[0:06] RUNNING       |  success phrase: not seen
+[0:21] RUNNING       |  success phrase: not seen
+[0:35] RUNNING       |  success phrase: not seen
+dry run: would terminate pod k8i04861n33in4. Nothing was changed.
+Result: would terminate, because the pod did not become healthy within 0.5 minutes; last known state: status RUNNING.
+[exit code 3]
+
+The pod the dry run said it would delete. It is still there, still RUNNING, with
+its uptime unbroken since 16:50:14.
+
+$ uv run runpod-watchdog-pod show k8i04861n33in4
+  id             k8i04861n33in4
+  name           watchdog-proving-server
+  status         RUNNING
+  image          nginx:alpine
+  args           (none)
+  exposed ports  80/tcp
+  runtime.ports  [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+  data center    US-CA-2
+  cost           0.06 US dollars per hour of Runpod account spend
+  actions        stop, restart, terminate
+  created        2026-08-12T16:50:14.593Z
+  started        2026-08-12T16:50:14.587Z
+[exit code 0]
+
+Worth reading twice: the exit code was 3, the same code a real run would have
+returned. A dry run whose exit code did not match the real one would be useless
+for testing a script around it. ADR-0004 fixed that rule; this is it working.
+
+Terminating the pod now. This is a manual termination by whoever ran the
+command below — the watchdog did not do it, and across runs B and C it changed
+nothing at all.
+
+# 2026-08-12 16:58:53 UTC
+$ uv run runpod-watchdog-pod terminate k8i04861n33in4
+terminated pod k8i04861n33in4. This was a manual termination, not the watchdog.
+[exit code 0]
+
