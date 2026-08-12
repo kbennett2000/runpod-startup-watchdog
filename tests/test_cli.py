@@ -1,7 +1,7 @@
-"""The command line: flag parsing, exit codes, and the settings report.
+"""The command line: flag parsing, exit codes, the settings report, and the hand-off to the loop.
 
-No network. `test_the_tool_makes_no_network_machinery_available` is the guard that keeps it that
-way for this cycle.
+No network. Every test here runs with the watch loop stubbed out, and
+`test_importing_the_package_touches_no_network` is the guard that keeps imports clean.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import textwrap
 import pytest
 
 from runpod_watchdog import __version__, cli
+from runpod_watchdog.watch import VERDICT_HEALTHY, Outcome
 
 
 def write_config(tmp_path, text: str):
@@ -22,6 +23,37 @@ def write_config(tmp_path, text: str):
 
 
 VALID = ["--pod-id", "abc123", "--max-minutes", "10", "--port", "8888"]
+
+HEALTHY = Outcome(VERDICT_HEALTHY, "every success signal fired", "none", 0)
+
+
+class StubClient:
+    """Stands in for RunpodClient. It cannot make a request, which is the point."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def no_real_watching(monkeypatch):
+    """Nothing in this file may build a real client or run a real watch.
+
+    These tests are about settings, reports and exit codes. The loop itself is covered by
+    tests/test_watch.py against a fake client, so here it is replaced wholesale — which also means
+    no test in this file can reach the network even if the settings are valid.
+    """
+    watched: list[tuple] = []
+    monkeypatch.setattr(cli, "RunpodClient", StubClient)
+    monkeypatch.setattr(
+        cli,
+        "watch",
+        lambda settings, client, **kwargs: watched.append((settings, client)) or HEALTHY,
+    )
+    return watched
 
 
 def row(out: str, name: str) -> str:
@@ -178,10 +210,81 @@ def test_a_phrase_is_quoted_so_stray_spaces_are_visible(capsys):
     assert row(capsys.readouterr().out, "success-phrase") == '" ready "'
 
 
-def test_the_report_says_watching_is_not_built_yet(capsys):
+# --- the hand-off to the watch loop -----------------------------------------------------------
+
+
+def test_the_resolved_settings_are_handed_to_the_loop(no_real_watching, capsys):
+    cli.main(VALID + ["--success-phrase", "ready", "--terminate"])
+
+    assert len(no_real_watching) == 1
+    settings, _ = no_real_watching[0]
+    assert (settings.pod_id, settings.port, settings.success_phrase) == ("abc123", 8888, "ready")
+    assert settings.terminate is True
+    assert "Watching pod abc123. Time limit 10 minutes." in capsys.readouterr().out
+
+
+def test_the_client_gets_the_shorter_log_timeout(no_real_watching):
     cli.main(VALID)
 
-    assert "Watching is not implemented yet" in capsys.readouterr().out
+    _, client = no_real_watching[0]
+    assert client.kwargs["log_timeout"] == cli.WATCH_LOG_TIMEOUT
+
+
+def test_the_client_is_closed_even_when_the_loop_raises(monkeypatch):
+    closed: list[StubClient] = []
+
+    def remember(**kwargs):
+        client = StubClient(**kwargs)
+        closed.append(client)
+        return client
+
+    monkeypatch.setattr(cli, "RunpodClient", remember)
+    monkeypatch.setattr(cli, "watch", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(VALID)
+
+    assert closed[0].closed is True
+
+
+def test_the_loops_exit_code_is_the_tools_exit_code(monkeypatch):
+    monkeypatch.setattr(
+        cli, "watch", lambda *a, **k: Outcome("timeout", "ran out of time", "stopped", 3)
+    )
+
+    assert cli.main(VALID) == 3
+
+
+def test_a_verdict_prints_what_happened(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli, "watch", lambda *a, **k: Outcome("failure", "the phrase repeated", "stopped", 4)
+    )
+
+    assert cli.main(VALID) == 4
+    assert "Result: stopped, because the phrase repeated." in capsys.readouterr().out
+
+
+def test_a_tool_error_goes_to_stderr(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "watch",
+        lambda *a, **k: Outcome(
+            "error", "No Runpod API key. Set the RUNPOD_API_KEY environment variable.", "none", 5
+        ),
+    )
+
+    assert cli.main(VALID) == 5
+
+    captured = capsys.readouterr()
+    assert captured.err.strip() == (
+        "error: No Runpod API key. Set the RUNPOD_API_KEY environment variable."
+    )
+    assert "Result:" not in captured.out
+
+
+def test_a_healthy_run_says_nothing_was_stopped(capsys):
+    assert cli.main(VALID) == 0
+    assert "Nothing was stopped" in capsys.readouterr().out
 
 
 # --- no network -------------------------------------------------------------------------------
@@ -215,6 +318,7 @@ def test_importing_the_package_touches_no_network():
         import runpod_watchdog.api
         import runpod_watchdog.cli
         import runpod_watchdog.config
+        import runpod_watchdog.watch
 
         print("no network at import")
         """

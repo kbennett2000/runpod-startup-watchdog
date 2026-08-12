@@ -1,7 +1,11 @@
 """Command-line entry point.
 
-This cycle covers settings only: parse the flags, layer them over the optional TOML config file,
-validate the result, and print it. No network calls, no watching yet.
+Parse the flags, layer them over the optional TOML config file, validate the result, print it, then
+hand the settings to the watch loop and return whatever it concluded as the exit code.
+
+The exit codes are the tool's real output for anyone scripting around it, so they are listed in
+docs/adr/0004-health-verdicts.md and in the README, and they are the same in a dry run as in a real
+one.
 """
 
 from __future__ import annotations
@@ -10,7 +14,9 @@ import argparse
 import sys
 
 from . import __version__, config
+from .api import RunpodClient
 from .config import ConfigError, Settings
+from .watch import VERDICT_ERROR, VERDICT_HEALTHY, WATCH_LOG_TIMEOUT, Outcome, watch
 
 # Exit code for a settings problem. 2 is argparse's own code for a bad command line, so a bad flag
 # and a bad config file report the same way.
@@ -117,8 +123,22 @@ def render(settings: Settings, config_path: str | None) -> str:
     width = max(len(name) for name, _ in rows)
     lines = ["Settings for this run:"]
     lines += [f"  {name.ljust(width)}  {value}" for name, value in rows]
-    lines += ["", "Watching is not implemented yet. This cycle covers settings only."]
     return "\n".join(lines)
+
+
+def report(outcome: Outcome) -> int:
+    """Print one closing line and hand back the exit code.
+
+    A tool error goes to stderr because it means the watchdog could not do its job; a verdict goes
+    to stdout because it means it did.
+    """
+    if outcome.verdict == VERDICT_ERROR:
+        print(f"error: {outcome.detail}", file=sys.stderr)
+    elif outcome.verdict == VERDICT_HEALTHY:
+        print(f"Result: healthy — {outcome.detail}. Nothing was stopped.")
+    else:
+        print(f"Result: {outcome.action}, because {outcome.detail}.")
+    return outcome.exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,4 +153,13 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CONFIG_ERROR
 
     print(render(settings, args.config))
-    return 0
+    print(f"\nWatching pod {settings.pod_id}. Time limit {format_minutes(settings.max_minutes)} "
+          f"minutes.")
+
+    client = RunpodClient(log_timeout=WATCH_LOG_TIMEOUT)
+    try:
+        outcome = watch(settings, client)
+    finally:
+        client.close()
+
+    return report(outcome)

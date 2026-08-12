@@ -109,6 +109,28 @@ def test_stop_pod_posts_the_documented_action(client, mocked):
     assert request.headers["Authorization"] == f"Bearer {KEY}"
 
 
+def test_start_pod_posts_the_documented_action(client, mocked):
+    """`start` is what --retry uses. The spec's `restart` needs a RUNNING pod, which a pod that
+    failed to start usually is not. ADR-0004."""
+    mocked.add(responses.POST, ACTION_URL, json=POD_BODY, status=200)
+
+    assert client.start_pod(POD) == POD_BODY
+
+    request = mocked.calls[0].request
+    assert request.method == "POST"
+    assert request.url == ACTION_URL
+    assert request.body == b'{"action": "start"}'
+    assert request.headers["Authorization"] == f"Bearer {KEY}"
+
+
+def test_start_pod_raises_conflict_when_the_pod_is_not_stoppedable(client, mocked):
+    """409 is the spec's answer to an action that is not valid for the pod's current status."""
+    mocked.add(responses.POST, ACTION_URL, json={"detail": "Pod is running"}, status=409)
+
+    with pytest.raises(api.ConflictError):
+        client.start_pod(POD)
+
+
 def test_terminate_pod_deletes_and_returns_nothing(client, mocked):
     """The spec's documented success for deletePod is 204 with no body."""
     mocked.add(responses.DELETE, POD_URL, status=204)
@@ -120,7 +142,7 @@ def test_terminate_pod_deletes_and_returns_nothing(client, mocked):
 
 
 def test_every_operation_sends_a_timeout(client, mocked, sent):
-    """CLAUDE.md's rule: nothing may block forever. One test covers all four so a new operation
+    """CLAUDE.md's rule: nothing may block forever. One test covers every operation so a new one
     that forgets a timeout cannot slip through."""
     mocked.add(responses.GET, POD_URL, json=POD_BODY, status=200)
     mocked.add(responses.POST, ACTION_URL, json=POD_BODY, status=200)
@@ -129,10 +151,11 @@ def test_every_operation_sends_a_timeout(client, mocked, sent):
 
     client.get_pod(POD)
     client.stop_pod(POD)
+    client.start_pod(POD)
     client.terminate_pod(POD)
     list(client.stream_pod_logs(POD))
 
-    assert len(sent) == 4
+    assert len(sent) == 5
     for kwargs in sent:
         assert kwargs.get("timeout") is not None
 
