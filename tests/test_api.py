@@ -10,6 +10,8 @@ docs/adr/0003-api-operations.md.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import requests
 import responses
@@ -18,6 +20,7 @@ from runpod_watchdog import api
 
 KEY = "test-key-never-logged"
 POD = "abc123"
+PODS_URL = "https://api.runpod.io/v2/pods"
 POD_URL = f"https://api.runpod.io/v2/pods/{POD}"
 ACTION_URL = f"{POD_URL}/action"
 LOGS_URL = f"{POD_URL}/logs"
@@ -144,20 +147,147 @@ def test_terminate_pod_deletes_and_returns_nothing(client, mocked):
 def test_every_operation_sends_a_timeout(client, mocked, sent):
     """CLAUDE.md's rule: nothing may block forever. One test covers every operation so a new one
     that forgets a timeout cannot slip through."""
+    mocked.add(responses.GET, PODS_URL, json={"pods": []}, status=200)
+    mocked.add(responses.POST, PODS_URL, json=POD_BODY, status=201)
     mocked.add(responses.GET, POD_URL, json=POD_BODY, status=200)
     mocked.add(responses.POST, ACTION_URL, json=POD_BODY, status=200)
     mocked.add(responses.DELETE, POD_URL, status=204)
     mocked.add(responses.GET, LOGS_URL, body=TWO_EVENTS, status=200, content_type="text/event-stream")
 
+    client.list_pods()
+    client.create_pod(name="n", image="i", cpu={"id": "cpu3c-2-4", "vcpuCount": 2})
     client.get_pod(POD)
     client.stop_pod(POD)
     client.start_pod(POD)
     client.terminate_pod(POD)
     list(client.stream_pod_logs(POD))
 
-    assert len(sent) == 5
+    assert len(sent) == 7
     for kwargs in sent:
         assert kwargs.get("timeout") is not None
+
+
+# --- creating and listing -------------------------------------------------------------------------
+#
+# These two are not the watchdog's, they are the proving run's. ADR-0006.
+
+
+def test_create_pod_posts_the_documented_body(client, mocked):
+    """Every key is the spec's own name for it, including `dataCenterIds` — the only one whose
+    flag name and body name differ."""
+    mocked.add(responses.POST, PODS_URL, json=POD_BODY, status=201)
+
+    assert client.create_pod(
+        name="watchdog-proving-run",
+        image="nginx:alpine",
+        cpu={"id": "cpu3c-2-4", "vcpuCount": 2},
+        args='sh -c "echo hello"',
+        ports=["80/tcp"],
+        disk=10,
+        cloud="SECURE",
+        data_center_ids=["US-KS-2"],
+    ) == POD_BODY
+
+    request = mocked.calls[0].request
+    assert request.method == "POST"
+    assert request.url == PODS_URL
+    assert request.headers["Authorization"] == f"Bearer {KEY}"
+    assert json.loads(request.body) == {
+        "name": "watchdog-proving-run",
+        "image": "nginx:alpine",
+        "cpu": {"id": "cpu3c-2-4", "vcpuCount": 2},
+        "args": 'sh -c "echo hello"',
+        "ports": ["80/tcp"],
+        "disk": 10,
+        "cloud": "SECURE",
+        "dataCenterIds": ["US-KS-2"],
+    }
+
+
+def test_create_pod_omits_what_was_not_asked_for(client, mocked):
+    """`CreatePodRequest` sets unevaluatedProperties: false, and a key sent as null is still a key
+    sent. Leaving it out is what lets Runpod's own defaults apply."""
+    mocked.add(responses.POST, PODS_URL, json=POD_BODY, status=201)
+
+    client.create_pod(name="n", image="nginx:alpine", cpu={"id": "cpu3c-2-4", "vcpuCount": 2})
+
+    assert json.loads(mocked.calls[0].request.body) == {
+        "name": "n",
+        "image": "nginx:alpine",
+        "cpu": {"id": "cpu3c-2-4", "vcpuCount": 2},
+    }
+
+
+def test_create_pod_sends_a_gpu_instance_as_gpu(client, mocked):
+    mocked.add(responses.POST, PODS_URL, json=POD_BODY, status=201)
+
+    client.create_pod(name="n", image="i", gpu={"id": "NVIDIA GeForce RTX 4090", "count": 1})
+
+    body = json.loads(mocked.calls[0].request.body)
+    assert body["gpu"] == {"id": "NVIDIA GeForce RTX 4090", "count": 1}
+    assert "cpu" not in body
+
+
+@pytest.mark.parametrize(
+    "instance",
+    [
+        {},
+        {"cpu": {"id": "cpu3c-2-4", "vcpuCount": 2}, "gpu": {"id": "NVIDIA GeForce RTX 4090"}},
+    ],
+    ids=["neither", "both"],
+)
+def test_create_pod_needs_exactly_one_instance_type(client, mocked, instance):
+    """The spec's rule, checked before the round trip: "supply exactly one of gpu or cpu"."""
+    with pytest.raises(ValueError):
+        client.create_pod(name="n", image="i", **instance)
+
+    assert len(mocked.calls) == 0
+
+
+def test_create_pod_rejection_names_what_runpod_said(client, mocked):
+    """400 and 422 are both declared on createPod and neither was mapped before this cycle."""
+    mocked.add(
+        responses.POST,
+        PODS_URL,
+        json={"title": "Bad Request", "status": 400, "detail": "no such cpu flavor"},
+        status=400,
+        content_type="application/problem+json",
+    )
+
+    with pytest.raises(api.BadRequestError) as caught:
+        client.create_pod(name="n", image="i", cpu={"id": "nope", "vcpuCount": 2})
+
+    assert "no such cpu flavor" in str(caught.value)
+
+
+def test_an_unprocessable_body_has_its_own_error(client, mocked):
+    mocked.add(responses.POST, PODS_URL, json={"title": "Unprocessable", "status": 422}, status=422)
+
+    with pytest.raises(api.UnprocessableEntityError):
+        client.create_pod(name="n", image="i", cpu={"id": "cpu3c-2-4", "vcpuCount": 3})
+
+
+def test_list_pods_unwraps_the_envelope(client, mocked):
+    """The spec returns {"pods": [...]} and the envelope carries nothing else."""
+    mocked.add(responses.GET, PODS_URL, json={"pods": [POD_BODY]}, status=200)
+
+    assert client.list_pods() == [POD_BODY]
+    assert mocked.calls[0].request.url == PODS_URL
+
+
+def test_list_pods_survives_a_response_with_no_pods_key(client, mocked):
+    mocked.add(responses.GET, PODS_URL, json={}, status=200)
+
+    assert client.list_pods() == []
+
+
+def test_a_404_on_a_call_with_no_pod_is_not_a_missing_pod(client, mocked):
+    """`POST /v2/pods` returning 404 means the route is gone, not that a pod is. Reporting it as
+    PodNotFoundError would send the caller looking for the wrong problem."""
+    mocked.add(responses.POST, PODS_URL, status=404)
+
+    with pytest.raises(api.UnexpectedStatusError):
+        client.create_pod(name="n", image="i", cpu={"id": "cpu3c-2-4", "vcpuCount": 2})
 
 
 # --- the API key --------------------------------------------------------------------------------

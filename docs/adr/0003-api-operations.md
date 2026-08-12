@@ -1,6 +1,8 @@
 # 0003 — Which REST v2 operations the watchdog uses, and what the spec left ambiguous
 
-Status: Accepted
+Status: Accepted. Amended by [ADR-0006](0006-pod-lifecycle-is-a-separate-command.md), which adds
+`createPod` and `listPods` to the client for the `runpod-watchdog-pod` command. The watchdog itself
+still uses exactly the four operations below.
 
 ## Context
 

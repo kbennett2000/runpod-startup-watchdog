@@ -1,8 +1,12 @@
 """Runpod REST API v2 client.
 
-Four jobs and no more: read one pod, read its logs, stop it, terminate it. This module is
-transport. It has no retries, no watch loop, and no opinion about what "healthy" means — those
-belong to later cycles.
+Six jobs and no more: read one pod, read its logs, stop it, start it, terminate it, and — for the
+proving run only — create one and list them. This module is transport. It has no retries, no watch
+loop, and no opinion about what "healthy" means.
+
+`create_pod` and `list_pods` are here for the `runpod-watchdog-pod` command, not for the watchdog:
+the watchdog watches a pod somebody else created and never makes one. See
+docs/adr/0006-pod-lifecycle-is-a-separate-command.md.
 
 Every path, method, parameter, and status code here was read out of Runpod's own OpenAPI document
 at https://api.runpod.io/v2/openapi.json, snapshot dated 2026-07-30 (OpenAPI 3.1.0, info.version
@@ -66,6 +70,11 @@ class MissingApiKeyError(RunpodError):
     """No API key in the environment. Raised before anything is sent."""
 
 
+class BadRequestError(RunpodError):
+    """HTTP 400. Runpod understood the request and refused it — a bad image, a flavor that does
+    not exist, a port string it will not parse."""
+
+
 class AuthError(RunpodError):
     """HTTP 401. Runpod rejected the key."""
 
@@ -80,6 +89,10 @@ class PodNotFoundError(RunpodError):
 
 class ConflictError(RunpodError):
     """HTTP 409. The action is not valid for the pod's current status."""
+
+
+class UnprocessableEntityError(RunpodError):
+    """HTTP 422. The body is shaped wrong — a missing field, a value outside its range."""
 
 
 class RateLimitedError(RunpodError):
@@ -144,7 +157,16 @@ def _detail(response: requests.Response, key: str) -> str:
     return ""
 
 
-def _raise_for_status(response: requests.Response, pod_id: str, key: str) -> None:
+def _raise_for_status(
+    response: requests.Response, subject: str, key: str, *, pod_id: str | None
+) -> None:
+    """Turn a failed response into one plain sentence.
+
+    `subject` names what the call was about, so the same mapping serves both the pod-scoped calls
+    ("pod 'abc123'") and the two that are not ("a new pod", "your pod list"). `pod_id` is None for
+    the calls with no pod, which is what makes a 404 on those an unexpected status rather than a
+    missing pod — `POST /v2/pods` returning 404 means the route is gone, not that a pod is.
+    """
     status = response.status_code
     if status < 400:
         return
@@ -152,26 +174,28 @@ def _raise_for_status(response: requests.Response, pod_id: str, key: str) -> Non
     detail = _detail(response, key)
     said = f" Runpod said: {detail}" if detail else ""
 
+    if status == 400:
+        raise BadRequestError(f"Runpod rejected the request for {subject}.{said}")
     if status == 401:
         raise AuthError(
             f"Runpod rejected the API key. Check the {API_KEY_ENV} environment variable.{said}"
         )
     if status == 403:
-        raise ForbiddenError(
-            f"That API key is not allowed to do this to pod {pod_id!r}.{said}"
-        )
-    if status == 404:
+        raise ForbiddenError(f"That API key is not allowed to act on {subject}.{said}")
+    if status == 404 and pod_id is not None:
         raise PodNotFoundError(f"Runpod has no pod with id {pod_id!r}.{said}")
     if status == 409:
         raise ConflictError(
-            f"Runpod refused that action for pod {pod_id!r} in its current status.{said}"
+            f"Runpod refused that action for {subject} in its current status.{said}"
         )
+    if status == 422:
+        raise UnprocessableEntityError(f"Runpod could not process the request for {subject}.{said}")
     if status == 429:
         raise RateLimitedError(f"Runpod is rate limiting this API key.{said}")
     if 500 <= status < 600:
         raise ServerError(f"Runpod had a server error (HTTP {status}).{said}")
     raise UnexpectedStatusError(
-        f"Runpod returned an unexpected HTTP {status} for pod {pod_id!r}.{said}"
+        f"Runpod returned an unexpected HTTP {status} for {subject}.{said}"
     )
 
 
@@ -270,12 +294,16 @@ class RunpodClient:
         method: str,
         path: str,
         *,
-        pod_id: str,
+        pod_id: str | None,
+        subject: str | None = None,
         json_body: dict | None = None,
         params: dict | None = None,
         extra_headers: dict[str, str] | None = None,
         stream: bool = False,
     ) -> requests.Response:
+        # Every call is about one pod except `createPod` and `listPods`, which pass their own
+        # subject and no pod id.
+        subject = subject if subject is not None else f"pod {pod_id!r}"
         key = _api_key()
         headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
         if extra_headers:
@@ -296,11 +324,87 @@ class RunpodClient:
             raise NetworkError(f"Could not reach Runpod at {url}: {exc}") from exc
 
         try:
-            _raise_for_status(response, pod_id, key)
+            _raise_for_status(response, subject, key, pod_id=pod_id)
         except RunpodError:
             response.close()
             raise
         return response
+
+    def create_pod(
+        self,
+        *,
+        name: str,
+        image: str,
+        gpu: dict | None = None,
+        cpu: dict | None = None,
+        args: str | None = None,
+        ports: list[str] | None = None,
+        disk: int | None = None,
+        cloud: str | None = None,
+        data_center_ids: list[str] | None = None,
+    ) -> dict:
+        """POST /v2/pods — the `createPod` operation. Returns the created pod.
+
+        Body fields, all read out of the spec's `CreatePodRequest` (which is `ContainerConfig`
+        plus a few pod-only keys):
+
+        - `name`, `image` — the only two the spec marks required.
+        - `gpu` / `cpu` — the instance type. The spec says "supply exactly one of `gpu` or `cpu`",
+          enforced on Runpod's side, and checked here too so a mistake costs a `ValueError` instead
+          of a round trip. `gpu` is `{"id": ..., "count": ...}`; `cpu` is `{"id": ..., "vcpuCount":
+          ...}` with the flavor id from `GET /v2/catalog/cpus` and a vCPU count that must be a
+          power of two.
+        - `args` — the container start command. The spec calls it "Arguments passed to the
+          container entrypoint"; it is the field the legacy GraphQL surface named `dockerArgs`.
+        - `ports` — exposed ports as `port/protocol` strings, the same shape a pod reports back.
+        - `disk` — container disk in GB, ephemeral and wiped on restart.
+        - `cloud` — `SECURE` or `COMMUNITY`. Omitted means Runpod's default, `SECURE`.
+        - `data_center_ids` — sent as `dataCenterIds`. Omitted lets the scheduler choose.
+
+        Anything left as None is left out of the body entirely rather than sent as null, so
+        Runpod's own defaults apply. `CreatePodRequest` sets `unevaluatedProperties: false`, so a
+        key that is not in the schema is rejected outright — there is no room to send extras.
+
+        The documented success is 201 with the pod, and the pod comes back `PROVISIONING`: the
+        spec says plainly that provisioning is asynchronous and that a caller should poll rather
+        than assume the pod is running when this returns. Watching that gap is the whole job of
+        this tool.
+        """
+        if (gpu is None) == (cpu is None):
+            raise ValueError(
+                "create_pod needs exactly one of gpu or cpu: a pod is either a GPU pod or a CPU pod."
+            )
+
+        body: dict[str, object] = {"name": name, "image": image}
+        optional: dict[str, object | None] = {
+            "gpu": gpu,
+            "cpu": cpu,
+            "args": args,
+            "ports": ports,
+            "disk": disk,
+            "cloud": cloud,
+            "dataCenterIds": data_center_ids,
+        }
+        body.update({key: value for key, value in optional.items() if value is not None})
+
+        response = self._request(
+            "POST", "/v2/pods", pod_id=None, subject="a new pod", json_body=body
+        )
+        return response.json()
+
+    def list_pods(self) -> list[dict]:
+        """GET /v2/pods — the `listPods` operation. Returns every pod on the account.
+
+        The spec wraps the array in a `{"pods": [...]}` envelope; this unwraps it, because the
+        envelope carries nothing else — no paging, no total. The operation takes no parameters.
+
+        This exists so a run can be proved clean afterwards: list the account and show that
+        nothing the run created is still there.
+        """
+        response = self._request("GET", "/v2/pods", pod_id=None, subject="your pod list")
+        body = response.json()
+        pods = body.get("pods") if isinstance(body, dict) else None
+        return pods if isinstance(pods, list) else []
 
     def get_pod(self, pod_id: str) -> dict:
         """GET /v2/pods/{id} — the `getPod` operation. Returns the pod as the API reports it.

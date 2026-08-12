@@ -15,6 +15,9 @@ dependencies = ["requests>=2.32"]
 
 [project.scripts]
 runpod-watchdog = "runpod_watchdog.cli:main"
+# The pod handling around the watchdog, kept out of the watchdog itself so the tool that decides
+# to stop a pod is not also the tool that can create one. ADR-0006.
+runpod-watchdog-pod = "runpod_watchdog.podctl:main"
 
 [dependency-groups]
 # `responses` mocks requests at the HTTP adapter, so the API tests exercise the real requests
