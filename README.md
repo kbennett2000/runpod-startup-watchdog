@@ -60,14 +60,35 @@ If you set more than one success signal, **all of them** have to fire. Each one 
 own direction: a port can answer before the software behind it is ready, and a phrase can print
 before the port is open. If you want either signal on its own to be enough, set just that one.
 
-`--port` is the weaker of the two signals, for a reason worth knowing before you rely on it. Runpod
-only publishes a pod's public port mapping once the pod is `RUNNING`, and this tool spends most of
-its time watching pods that are still `PROVISIONING` or `STARTING`. The tool reports that plainly on
-every line rather than treating it as a fault, but a log phrase is the more dependable signal.
+`--port` works, and it was the part of this tool least certain to. Runpod's REST API v2 does publish
+a pod's public address once the pod is running, and the watchdog opens a real TCP connection to it —
+[demo/01-port-field-question.txt](demo/01-port-field-question.txt) is the run that settled it. Two
+things to know before relying on it:
+
+- **Expose the port as `tcp`, not `http`.** A port exposed as `80/http` gets an address inside
+  `100.64.0.0/10`, the range reserved for carrier-grade NAT, which is not reachable from your
+  machine. Only a `tcp` port gets a publicly routable address. Same port, different answer.
+- **There is no address at all for the first half-minute or so.** The tool reports that on every
+  line as "no public mapping published yet" rather than treating it as a fault.
 
 If you ask for a port the pod never exposed, the tool says so and lists the ports the pod actually
 exposes. If that port was your only success signal, it stops before watching rather than running the
 clock down on a pod it could never have observed.
+
+### How long to allow
+
+Give `--max-minutes` enough room for the image to download, and then some.
+
+A pod reports its status as `RUNNING` from the moment it is created — before the image has been
+fetched, and long before anything inside it is serving. On the live run, Runpod called a pod
+`RUNNING` thirteen seconds before nginx started and twenty-four seconds before there was an address
+to connect to, and it never passed through `PROVISIONING` or `STARTING` at all. That was a 20 MB
+image. A multi-gigabyte machine-learning image will take minutes, and the pod will say `RUNNING` for
+every one of them.
+
+This is not a complaint about Runpod. It is the reason the tool exists: from outside, a pod that is
+slow and a pod that is broken look exactly the same, which is why *you* have to say what healthy
+means. It is also why the status column in the output is information and never a verdict.
 
 ## Settings
 
@@ -122,3 +143,41 @@ runpod-watchdog --config watchdog.toml --pod-id someotherpod --max-minutes 15
 
 The API key is not a setting. It is read only from the `RUNPOD_API_KEY` environment variable, never
 from a config file.
+
+## Making a pod to watch
+
+The watchdog only watches. Creating, reading, listing and deleting pods is a second command,
+`runpod-watchdog-pod`, kept separate so the tool that decides to stop a pod is not also the tool that
+can make one.
+
+```
+runpod-watchdog-pod create --name my-pod --image nginx:alpine --cpu cpu3c --vcpu 2 --port 80/tcp --disk 5
+runpod-watchdog-pod show POD_ID          # read one pod back; --json for the whole response
+runpod-watchdog-pod list                 # every pod on the account
+runpod-watchdog-pod terminate POD_ID     # delete one, irreversibly
+```
+
+`create` takes `--dry-run` too, which prints the exact request body it would send and sends nothing.
+
+The `--json` output hides the values of the pod's environment variables and keeps their names,
+because this command exists partly to produce transcripts that get published.
+
+## Proven live
+
+Everything above was run against the real Runpod API on 12 August 2026, on the cheapest CPU
+instance Runpod offers. The terminal transcripts are committed unedited:
+
+| Transcript | What it shows |
+| --- | --- |
+| [00-baseline-and-catalog.txt](demo/00-baseline-and-catalog.txt) | The account before anything was created, and how the instance was chosen |
+| [01-port-field-question.txt](demo/01-port-field-question.txt) | Whether the public port address is published — it is — and the raw pod response |
+| [02-proving-run-a-broken-pod.txt](demo/02-proving-run-a-broken-pod.txt) | A pod that crash-loops: stopped on the repeated failure phrase, exit code 4 |
+| [03-proving-run-b-healthy-pod.txt](demo/03-proving-run-b-healthy-pod.txt) | A pod that is genuinely serving: healthy, exit code 0, untouched |
+| [04-proving-run-c-dry-run.txt](demo/04-proving-run-c-dry-run.txt) | `--dry-run --terminate` against a healthy live pod: exit code 3, pod still there |
+| [05-account-after.txt](demo/05-account-after.txt) | Both pods terminated, account empty, nothing left billing |
+
+The run also found a real bug: the log reader was discarding every line it collected, so both log
+signals would never have fired. Mocked tests could not catch it, because a mock stream ends cleanly
+and a real one goes quiet. What was found, what was fixed, and where the API differs from its own
+documentation is written up in
+[docs/adr/0005-live-findings.md](docs/adr/0005-live-findings.md).

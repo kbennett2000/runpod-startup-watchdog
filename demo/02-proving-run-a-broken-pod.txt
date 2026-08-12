@@ -1,0 +1,126 @@
+Cycle 4, live proving run A — the broken pod.
+
+The case the tool exists for. A pod whose start command prints one distinctive
+line and exits immediately, so Runpod restarts it and it crash-loops. Expected:
+the watchdog sees the failure phrase repeat, stops the pod, and exits 4.
+
+The image is alpine:3.20, the same one runpodctl's own source names when it
+describes verifying port behaviour against production.
+
+# 2026-08-12 16:54:47 UTC
+$ uv run runpod-watchdog-pod create --name watchdog-proving-crash --image alpine:3.20 --cpu cpu3c --vcpu 2 --args sh\ -c\ \"echo\ WATCHDOG-CRASH-TEST\;\ exit\ 1\" --disk 5
+Creating pod with:
+  name   "watchdog-proving-crash"
+  image  "alpine:3.20"
+  cpu    {"id": "cpu3c", "vcpuCount": 2}
+  args   "sh -c \"echo WATCHDOG-CRASH-TEST; exit 1\""
+  disk   5
+
+pod id: dye2vzcx2v2bzp
+  id             dye2vzcx2v2bzp
+  name           watchdog-proving-crash
+  status         RUNNING
+  image          alpine:3.20
+  args           sh -c "echo WATCHDOG-CRASH-TEST; exit 1"
+  exposed ports  (none)
+  runtime.ports  null
+  data center    EU-RO-1
+  cost           0.06 US dollars per hour of Runpod account spend
+  actions        stop, restart, terminate
+  created        2026-08-12T16:54:48.186Z
+  started        2026-08-12T16:54:48.179Z
+
+Provisioning is asynchronous: the pod starts PROVISIONING and is not usable yet. That gap is what the watchdog watches.
+[exit code 0]
+
+Now the watchdog. Failure phrase is the line the container prints. Time limit 5
+minutes. No --terminate, so the default action applies: stop.
+
+# 2026-08-12 16:55:05 UTC
+$ uv run runpod-watchdog --pod-id dye2vzcx2v2bzp --max-minutes 5 --failure-phrase WATCHDOG-CRASH-TEST
+Settings for this run:
+  pod-id          dye2vzcx2v2bzp
+  max-minutes     5
+  port            (not set)
+  success-phrase  (not set)
+  failure-phrase  "WATCHDOG-CRASH-TEST"
+  retry           no
+  terminate       no
+  dry-run         no
+  config file     (none)
+
+Watching pod dye2vzcx2v2bzp. Time limit 5 minutes.
+[0:06] RUNNING       |  failure phrase: 3 of 2
+[0:06] the failure phrase 'WATCHDOG-CRASH-TEST' appeared 3 times
+stopped pod dye2vzcx2v2bzp
+Result: stopped, because the failure phrase 'WATCHDOG-CRASH-TEST' appeared 3 times.
+[exit code 4]
+
+The log lines behind that verdict, so the count is checkable. The phrase comes
+from the container's own output, not from a system echo of the start command.
+
+$ uv run python /tmp/claude-1000/-home-kb-Desktop-projects-runpod-startup-watchdog/4fee3294-8fe3-48e1-8e54-5eabad8eb92b/scratchpad/dump_logs.py dye2vzcx2v2bzp 5
+13 log events
+  [system] create container alpine:3.20
+  [system] 3.20 Pulling from library/alpine
+  [system] 25f1d6b1951a Pulling fs layer
+  [system] 25f1d6b1951a Downloading [>                                                  ]  48.48kB/3.63MB
+  [system] 25f1d6b1951a Download complete
+  [system] 25f1d6b1951a Extracting [>                                                  ]  65.54kB/3.63MB
+  [system] 25f1d6b1951a Extracting [==================================================>]   3.63MB/3.63MB
+  [system] 25f1d6b1951a Pull complete
+  [system] Digest: sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+  [system] Status: Downloaded newer image for alpine:3.20
+  [system] start container for alpine:3.20: begin
+  [system] start container for alpine:3.20: begin
+  [system] remove container
+[exit code 0]
+
+The pod's state after the watchdog acted. EXITED is what stop leaves behind, and
+cost drops to 0.0 per hour. Storage still accrues on a stopped pod, which is why
+the next command terminates it.
+
+$ uv run runpod-watchdog-pod show dye2vzcx2v2bzp
+  id             dye2vzcx2v2bzp
+  name           watchdog-proving-crash
+  status         EXITED
+  image          alpine:3.20
+  args           sh -c "echo WATCHDOG-CRASH-TEST; exit 1"
+  exposed ports  (none)
+  runtime.ports  null
+  data center    EU-RO-1
+  cost           0.06 US dollars per hour of Runpod account spend
+  actions        start, terminate
+  created        2026-08-12T16:54:48.186Z
+  started        2026-08-12T16:54:48.179Z
+[exit code 0]
+
+Two corrections to the notes above, written after reading the output rather
+than before it. Both were wrong.
+
+1. "so the count is checkable" — it is not, from that dump. Every event in it
+   has source `system`. The three container lines the watchdog counted are gone
+   from the log tail, because stopping the pod removed the container ("remove
+   container" is the last system line). The container's output is readable while
+   the pod is alive and not afterwards. The watchdog's own printed line, "failure
+   phrase: 3 of 2", taken at 16:55:11 while the pod was still running, is the
+   record of what it saw. A later reader cannot re-derive it from the log.
+
+   What the dump does show is the crash loop itself: "start container for
+   alpine:3.20: begin" appears twice in 13 lines, for one pod that was asked to
+   start once. That is the restart behaviour the failure signal is built on.
+
+2. "cost drops to 0.0 per hour" — it does not. The pod is EXITED and `cost` still
+   reads 0.06. Runpod's OpenAPI document describes the field as "Current cost in
+   USD per hour (0.0 when EXITED or TERMINATED)". Live, on a stopped pod, it does
+   not do that. So `cost` cannot be used to tell whether a pod is still billing,
+   and nothing in this tool reads it for that purpose. Recorded in ADR-0005.
+
+# 2026-08-12 16:56:19 UTC
+Terminating the pod created for this run. Storage keeps accruing on a stopped
+pod, so stopped is not finished.
+
+$ uv run runpod-watchdog-pod terminate dye2vzcx2v2bzp
+terminated pod dye2vzcx2v2bzp. This was a manual termination, not the watchdog.
+[exit code 0]
+

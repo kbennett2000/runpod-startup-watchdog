@@ -1,0 +1,30 @@
+Cycle 4, live proving run — step 5: nothing left behind.
+
+Two pods were created during this session and no others:
+
+  k8i04861n33in4  watchdog-proving-server  nginx:alpine  US-CA-2  created 16:50:14
+  dye2vzcx2v2bzp  watchdog-proving-crash   alpine:3.20   EU-RO-1  created 16:54:48
+
+Both were terminated, not stopped. Terminated matters: Runpod's pricing docs say
+storage keeps accruing on a stopped pod (https://docs.runpod.io/pods/pricing),
+so a stopped pod is not a finished pod. A terminated pod is gone.
+
+The account listing below is the check. It should match
+demo/00-baseline-and-catalog.txt, which was taken before anything was created.
+
+# 2026-08-12 16:59:04 UTC
+$ uv run runpod-watchdog-pod list
+No pods on this account.
+[exit code 0]
+
+Reading each created pod back by id. A terminated pod is gone, so REST v2 answers
+404 and the tool says so plainly and exits 5. That 404 is the receipt.
+
+$ uv run runpod-watchdog-pod show k8i04861n33in4
+error: Runpod has no pod with id 'k8i04861n33in4'. Runpod said: pod not found
+[exit code 5]
+
+$ uv run runpod-watchdog-pod show dye2vzcx2v2bzp
+error: Runpod has no pod with id 'dye2vzcx2v2bzp'. Runpod said: pod not found
+[exit code 5]
+

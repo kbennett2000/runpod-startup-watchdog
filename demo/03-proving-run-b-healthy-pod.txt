@@ -1,0 +1,57 @@
+Cycle 4, live proving run B — the healthy pod.
+
+The same nginx:alpine pod from demo/01-port-field-question.txt, still running.
+Watched with both success signals at once, which the tool ANDs: the pod is
+healthy only when the TCP port answers AND the phrase has appeared.
+
+--port 80 is usable because step 1 showed the public address field is populated.
+The success phrase is "start worker processes", which is the line nginx prints
+when it actually begins serving — a line taken from the pod's own log in
+demo/01, not from an assumption about the image.
+
+Expected: healthy, exit code 0, and the pod untouched.
+
+# 2026-08-12 16:57:35 UTC
+$ uv run runpod-watchdog --pod-id k8i04861n33in4 --max-minutes 5 --port 80 --success-phrase start\ worker\ processes
+Settings for this run:
+  pod-id          k8i04861n33in4
+  max-minutes     5
+  port            80
+  success-phrase  "start worker processes"
+  failure-phrase  (not set)
+  retry           no
+  terminate       no
+  dry-run         no
+  config file     (none)
+
+Watching pod k8i04861n33in4. Time limit 5 minutes.
+[0:06] RUNNING       |  port 80: answered at 38.80.152.147:39998  |  success phrase: seen
+[0:06] every success signal fired
+Result: healthy — every success signal fired. Nothing was stopped.
+[exit code 0]
+
+The pod after the healthy verdict. Still RUNNING, and its actions list still offers
+stop — the watchdog changed nothing, which is what a healthy verdict means.
+
+$ uv run runpod-watchdog-pod show k8i04861n33in4
+  id             k8i04861n33in4
+  name           watchdog-proving-server
+  status         RUNNING
+  image          nginx:alpine
+  args           (none)
+  exposed ports  80/tcp
+  runtime.ports  [{"ip": "100.65.23.30", "private": 19123, "public": 60223, "type": "http"}, {"ip": "38.80.152.147", "private": 80, "public": 39998, "type": "tcp"}]
+  data center    US-CA-2
+  cost           0.06 US dollars per hour of Runpod account spend
+  actions        stop, restart, terminate
+  created        2026-08-12T16:50:14.593Z
+  started        2026-08-12T16:50:14.587Z
+[exit code 0]
+
+Both signals fired on the first poll, six seconds in, because this pod had
+already been running for seven minutes before the watch started. A real startup
+watch is the case in demo/01: null port mapping and a downloading image for the
+first half-minute.
+
+This pod is left running on purpose. Proving run C in
+demo/04-proving-run-c-dry-run.txt uses it, and terminates it at the end.
