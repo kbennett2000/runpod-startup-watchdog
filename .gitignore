@@ -1,0 +1,27 @@
+# Personal Claude Code config (permissions) — not shared. This pattern ignores the file both
+# in this standalone project and while the folder is still nested inside its origin repo.
+.claude/settings.local.json
+
+# The shared engine pin (.claude/settings.json) is intentionally NOT ignored — it travels with
+# the repo so every clone runs on the same model/effort.
+
+# cycle runtime
+/.factory/
+/cycle.log
+PAUSE
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Environment and secrets. The Runpod API key lives only in RUNPOD_API_KEY, never in a file
+# that could be committed.
+.venv/
+.env
+
+# uv.lock is committed on purpose: it pins the exact dependency versions, so a clone resolves
+# to the same build that was tested here. Do not add it below.

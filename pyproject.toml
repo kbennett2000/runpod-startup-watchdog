@@ -1,0 +1,33 @@
+[project]
+name = "runpod-startup-watchdog"
+description = "Watch one new Runpod pod during startup and stop it if it never becomes healthy."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+# The version lives in src/runpod_watchdog/__init__.py and is read from there (see
+# [tool.hatch.version]) so there is only one place to change it.
+dynamic = ["version"]
+# requests is the only runtime dependency. ADR-0001 fixes plain HTTP against Runpod's REST API
+# v2 as the API surface, so it is declared from the first commit even though the settings cycle
+# makes no HTTP calls yet — the lock file should be right from the start.
+dependencies = ["requests>=2.32"]
+
+[project.scripts]
+runpod-watchdog = "runpod_watchdog.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/runpod_watchdog/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/runpod_watchdog"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
