@@ -17,7 +17,9 @@ dependencies = ["requests>=2.32"]
 runpod-watchdog = "runpod_watchdog.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.3"]
+# `responses` mocks requests at the HTTP adapter, so the API tests exercise the real requests
+# code path — headers, query strings, status codes, streamed bodies — with nothing on the wire.
+dev = ["pytest>=8.3", "responses>=0.25"]
 
 [build-system]
 requires = ["hatchling"]

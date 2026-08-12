@@ -187,13 +187,42 @@ def test_the_report_says_watching_is_not_built_yet(capsys):
 # --- no network -------------------------------------------------------------------------------
 
 
-def test_the_tool_makes_no_network_machinery_available():
-    """CLAUDE.md forbids live API calls until the final proving run. This cycle has no HTTP code
-    at all, and importing the command line must not pull any in."""
-    probe = "import runpod_watchdog.cli, sys; print('requests' in sys.modules)"
+def test_importing_the_package_touches_no_network():
+    """CLAUDE.md forbids live API calls until the final proving run.
 
-    result = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    Cycle 1 proved this by checking that no HTTP library was imported at all. Cycle 2 adds one on
+    purpose, so that check would now be false. This proves the stronger thing instead: importing
+    every module in the package opens no connection. The probe makes connecting and name lookup
+    raise, so any import that tried to reach the network would fail the import.
+
+    The connect methods are replaced rather than the socket class itself: `ssl` subclasses
+    `socket.socket` at its own import, so replacing the class breaks importing `ssl` and the probe
+    would fail for a reason that has nothing to do with this package.
+    """
+    probe = textwrap.dedent(
+        """
+        import socket
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("import-time network access")
+
+        socket.socket.connect = refuse
+        socket.socket.connect_ex = refuse
+        socket.create_connection = refuse
+        socket.getaddrinfo = refuse
+
+        import runpod_watchdog
+        import runpod_watchdog.api
+        import runpod_watchdog.cli
+        import runpod_watchdog.config
+
+        print("no network at import")
+        """
     )
 
-    assert result.stdout.strip() == "False"
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "no network at import"
