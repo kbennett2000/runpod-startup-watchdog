@@ -22,7 +22,7 @@ Public portfolio project for Kris Bennett (GitHub: kbennett2000, Twelve Rocks LL
 6. Settings come from command-line flags or a TOML config file (TOML is a plain-text settings format; read it with Python's built-in tomllib). Flags override the file.
 
 ## Verified technical facts — treat as landmines
-- desiredStatus RUNNING does not mean usable. The image may still be downloading.
+- The REST v2 field is `status`, not `desiredStatus` — that is the legacy GraphQL name, still used by runpodctl. status RUNNING does not mean usable. The image may still be downloading.
 - Runpod's own open-source Go CLI, runpodctl, has a --wait flag that blocks until the pod is actually usable, with a 10-minute default. Before writing the health-wait logic, read how runpodctl decides "usable" and mirror it: https://github.com/runpod/runpodctl
 - Pods restart automatically after their startup command exits, so a broken container crash-loops. That is why the failure signal is a repeating log pattern, not a single line.
 - Runpod has four live API surfaces: REST v2 (beta, current — build on this), REST v1 (deprecated), GraphQL (legacy), and serverless. The v2 spec is OpenAPI 3.1, 29 paths, 44 operations, fetchable without auth from Runpod's docs. Kris holds a pinned snapshot dated 2026-07-30 — ask him for it rather than guessing.

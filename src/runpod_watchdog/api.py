@@ -329,6 +329,27 @@ class RunpodClient:
         )
         return response.json()
 
+    def start_pod(self, pod_id: str) -> dict:
+        """POST /v2/pods/{id}/action with {"action": "start"} — the `podAction` operation.
+
+        Boots a stopped pod back toward RUNNING. The spec permits `start` only from EXITED or
+        ERROR, so this raises ConflictError on HTTP 409 if called on a pod that is still running or
+        still provisioning.
+
+        This exists for `--retry`. The spec's `restart` action is not usable for that job: it
+        requires a RUNNING pod, and a pod that failed to start usually is not one. Stop-then-start
+        works from every status this tool encounters. ADR-0004.
+
+        Returns the updated pod.
+        """
+        response = self._request(
+            "POST",
+            f"/v2/pods/{pod_id}/action",
+            pod_id=pod_id,
+            json_body={"action": "start"},
+        )
+        return response.json()
+
     def terminate_pod(self, pod_id: str) -> None:
         """DELETE /v2/pods/{id} — the `deletePod` operation. Irreversible.
 
