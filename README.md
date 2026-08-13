@@ -401,4 +401,4 @@ Each one is a short numbered file explaining a single decision.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Built by Kris Bennett ([Twelve Rocks LLC](https://github.com/kbennett2000)).
+MIT — see [LICENSE](LICENSE). Built by ([Kris Bennett](https://github.com/kbennett2000)).
