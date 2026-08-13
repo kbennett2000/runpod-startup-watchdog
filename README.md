@@ -1,3 +1,9 @@
+![runpod-startup-watchdog banner](assets/banner.png)
+
+You rent a machine on Runpod. Sometimes it never starts right — the software inside crashes over and over, or the machine never becomes usable — and the whole time, you're paying. This tool watches a pod you just created. You tell it what healthy means: a time limit, a port that answers, a phrase in the log. If the pod doesn't get there, the tool stops it, and the billing stops with it.
+
+Opt-in, one pod at a time, nothing clever. Community tool — not affiliated with or endorsed by Runpod.
+
 # runpod-startup-watchdog
 
 A command-line tool that watches one newly created [Runpod](https://www.runpod.io/) pod while it
